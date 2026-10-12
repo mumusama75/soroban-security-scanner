@@ -20,7 +20,7 @@ fn setup() -> TestContext<'static> {
 
     let admin = Address::generate(&env);
     let issuer = Address::generate(&env);
-    let token_contract = env.register_stellar_asset_contract(issuer.clone());
+    let token_contract = env.register_stellar_asset_contract_v2(issuer.clone());
     let token_id = token_contract.address();
     let token = token::Client::new(&env, &token_id);
     let token_admin = token::StellarAssetClient::new(&env, &token_id);
@@ -76,7 +76,7 @@ fn initialize_rejects_default_admin() {
     env.mock_all_auths();
 
     let issuer = Address::generate(&env);
-    let token_contract = env.register_stellar_asset_contract(issuer.clone());
+    let token_contract = env.register_stellar_asset_contract_v2(issuer.clone());
     let token_id = token_contract.address();
     let contract_id = env.register(SecurityScannerContract, ());
     let client = SecurityScannerContractClient::new(&env, &contract_id);
@@ -385,6 +385,37 @@ fn fund_bounty_pool_rejects_zero_amount() {
     let ctx = setup();
     let result = ctx.client.try_fund_bounty_pool(&ctx.admin, &0);
     assert_eq!(result, Err(Ok(ContractError::ZeroAmount)));
+}
+
+#[test]
+fn treasury_manager_can_fund_bounty_pool() {
+    let ctx = setup();
+    let treasurer = Address::generate(&ctx.env);
+    grant_roles_direct(&ctx, &treasurer, vec![&ctx.env, Role::TreasuryManager]);
+    let stranger = Address::generate(&ctx.env);
+
+    ctx.token_admin.mint(&treasurer, &1_000_000);
+    ctx.token_admin.mint(&stranger, &500_000);
+
+    // Stranger without TreasuryManager permission is rejected
+    let denied = ctx.client.try_fund_bounty_pool(&stranger, &100_000);
+    assert_eq!(denied, Err(Ok(ContractError::InsufficientPermissions)));
+
+    let before_contract_bal = ctx.token.balance(&ctx.contract_id);
+    let before_treasurer_bal = ctx.token.balance(&treasurer);
+
+    // TreasuryManager succeeds and actual tokens are transferred to contract custody
+    ctx.client.fund_bounty_pool(&treasurer, &250_000);
+
+    assert_eq!(ctx.client.get_bounty_pool(), 250_000);
+    assert_eq!(
+        ctx.token.balance(&ctx.contract_id),
+        before_contract_bal + 250_000
+    );
+    assert_eq!(
+        ctx.token.balance(&treasurer),
+        before_treasurer_bal - 250_000
+    );
 }
 
 // ---------------------------------------------------------------------------
